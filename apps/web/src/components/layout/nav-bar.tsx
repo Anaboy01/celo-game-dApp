@@ -7,6 +7,8 @@ import { Zap, Menu, X } from 'lucide-react'
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
 import { ConnectButton } from '../connect-button'
+import ConnectChainDropdown from '../chain-switch'
+
 
 
 
@@ -54,8 +56,13 @@ export function NavBar() {
           </div>
 
           {/* Actions */}
-          <div className="flex items-center gap-3">
+          <div className=" flex items-center gap-3">
           <ConnectButton/>
+          <div className='hidden md:block'>
+          <ConnectChainDropdown/>
+          </div>
+        
+
 
             {/* Mobile Menu */}
             <button
@@ -86,6 +93,7 @@ export function NavBar() {
               </Link>
             ))}
             <ConnectButton/>
+            <ConnectChainDropdown/>
           </div>
         )}
       </div>
