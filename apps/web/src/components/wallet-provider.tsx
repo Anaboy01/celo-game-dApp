@@ -28,7 +28,7 @@ const wagmiConfig = createConfig({
   transports: {
     [celo.id]: http(),
     [celoAlfajores.id]: http(),
-    [celoSepolia.id]: http(),
+    [celoSepolia.id]: http("https://celo-sepolia.g.alchemy.com/v2/xUY740Ko-VfFE5_Z-LApMNCH4_2g_l88"),
 
   },
   ssr: true,
