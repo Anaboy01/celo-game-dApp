@@ -6,7 +6,7 @@ import { Skeleton } from '@/components/ui/loading-skeleton'
 import { Trophy, Flame } from 'lucide-react'
 import { truncateAddress } from '@/lib/validation'
 
-interface LeaderboardEntry {
+export interface LeaderboardEntry {
   rank: number
   address: string
   score: number
@@ -20,15 +20,7 @@ interface LeaderboardTableProps {
   isLoading?: boolean
 }
 
-const mockData: LeaderboardEntry[] = [
-  { rank: 1, address: '0x1234567890abcdef1234567890abcdef12345678', score: 15250, games: 152, streak: 42, isCurrentUser: true },
-  { rank: 2, address: '0x9876543210fedcba9876543210fedcba98765432', score: 14820, games: 148, streak: 28 },
-  { rank: 3, address: '0x5555666677778888999900001111222233334444', score: 13500, games: 135, streak: 15 },
-  { rank: 4, address: '0x7777888899990000111122223333444455556666', score: 12100, games: 121, streak: 8 },
-  { rank: 5, address: '0x9999000011112222333344445555666677778888', score: 11450, games: 114, streak: 5 },
-]
-
-export function LeaderboardTable({ entries = mockData, isLoading = false }: LeaderboardTableProps) {
+export function LeaderboardTable({ entries, isLoading = false }: LeaderboardTableProps) {
   if (isLoading) {
     return (
       <div className="space-y-2">
@@ -37,6 +29,10 @@ export function LeaderboardTable({ entries = mockData, isLoading = false }: Lead
         ))}
       </div>
     )
+  }
+
+  if (!entries || entries.length === 0) {
+    return <p className="text-sm text-muted-foreground">No data available.</p>
   }
 
   return (
@@ -81,3 +77,5 @@ export function LeaderboardTable({ entries = mockData, isLoading = false }: Lead
     </div>
   )
 }
+
+
