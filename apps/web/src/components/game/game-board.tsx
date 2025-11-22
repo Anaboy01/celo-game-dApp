@@ -1,62 +1,135 @@
+// apps/web/src/components/game/game-board.tsx
 'use client'
 
 import { useState, useEffect } from 'react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Clock, Lightbulb, RotateCw } from 'lucide-react'
+import { Clock, Lightbulb, RotateCw, Loader2, Trophy } from 'lucide-react'
 import { useGame, useGameTimer } from '@/hooks/use-game'
 import { useSubmitGuess } from '@/hooks/use-submit-guess'
 import { useBuyHint } from '@/hooks/use-buy-hint'
+import { useStartGame } from '@/hooks/use-start-game'
+import { useAccount } from 'wagmi'
+import { getGameMetadata, getIPFSImageUrl } from '@/lib/ipfs'
+import { formatCELO } from '@/lib/contract-helpers'
+import { ImageGrid } from './image-grid'
 
 export function GameBoard() {
   const [guess, setGuess] = useState('')
   const [showHint, setShowHint] = useState(false)
+  const [gameMetadata, setGameMetadata] = useState<any>(null)
+  const [hasPlayerBoughtHint, setHasPlayerBoughtHint] = useState(false)
 
-  const { game, isLoading } = useGame('0x1234...5678')
-  const { timeLeft, isExpired, formattedTime } = useGameTimer(game?.endTime)
-  const { submitGuess, isLoading: isSubmitting, isSuccess } = useSubmitGuess()
+  const { address } = useAccount()
+  const { game, isLoading: isGameLoading, refetch } = useGame(address)
+  const { timeLeft, isExpired, formattedTime } = useGameTimer(game?.endTime ? Number(game.endTime) : undefined)
+  const { submitGuess, isLoading: isSubmitting, isSuccess, error: submitError } = useSubmitGuess()
   const { buyHint, isLoading: isBuyingHint } = useBuyHint()
+  const { startGame, isLoading: isStarting } = useStartGame()
+
+  // Fetch game metadata when game changes
+  useEffect(() => {
+    if (game && game.gameId) {
+      const templateId = Number(game.gameId) % 3 // Mock: cycle through 3 templates
+      getGameMetadata(templateId).then(metadata => {
+        setGameMetadata(metadata)
+      })
+    }
+  }, [game?.gameId])
 
   const handleSubmit = async () => {
     if (!guess.trim()) return
     await submitGuess(guess)
+    if (!submitError) {
+      setGuess('')
+      // Refetch game to see if we won
+      setTimeout(() => refetch(), 2000)
+    }
+  }
+
+  const handleBuyHint = async () => {
+    if (!game) return
+    await buyHint(game.hintCost)
+    setHasPlayerBoughtHint(true)
+    setShowHint(true)
+  }
+
+  const handleStartNewGame = async () => {
+    await startGame()
     setGuess('')
+    setShowHint(false)
+    setHasPlayerBoughtHint(false)
+    setTimeout(() => refetch(), 2000)
   }
 
-  if (isLoading) {
-    return <div className="text-center py-8 text-muted-foreground">Loading game...</div>
+  if (isGameLoading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+      </div>
+    )
   }
 
-  if (!game) {
-    return <div className="text-center py-8 text-muted-foreground">No active game</div>
+  // No active game - show start button
+  if (!game || !game.isActive) {
+    return (
+      <div className="space-y-6 text-center py-12">
+        <div className="space-y-2">
+          <h3 className="text-2xl font-bold text-foreground">Ready to Play?</h3>
+          <p className="text-muted-foreground">
+            Guess the word from 4 pictures and win CELO rewards!
+          </p>
+        </div>
+        <Button 
+          onClick={handleStartNewGame}
+          disabled={isStarting || !address}
+          size="lg"
+          className="gap-2"
+        >
+          {isStarting ? (
+            <>
+              <Loader2 className="w-5 h-5 animate-spin" />
+              Starting Game...
+            </>
+          ) : (
+            <>
+              <Trophy className="w-5 h-5" />
+              Start New Game
+            </>
+          )}
+        </Button>
+        {!address && (
+          <p className="text-sm text-muted-foreground">
+            Connect your wallet to start playing
+          </p>
+        )}
+      </div>
+    )
   }
+
+  const images = gameMetadata?.images || []
 
   return (
     <div className="space-y-6">
       {/* Game Header */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
           <Clock className={`w-5 h-5 ${isExpired ? 'text-destructive' : 'text-primary'}`} />
           <span className={`text-lg font-semibold ${isExpired ? 'text-destructive' : 'text-foreground'}`}>
             {formattedTime}
           </span>
         </div>
-        <div className="text-sm text-muted-foreground">Game 1 of 5</div>
+        <div className="text-right">
+          <p className="text-sm text-muted-foreground">Reward</p>
+          <p className="text-lg font-bold text-primary">
+            {formatCELO(game.rewardAmount)} CELO
+          </p>
+        </div>
       </div>
 
       {/* Image Grid */}
-      <div className="grid grid-cols-2 gap-4">
-        {[1, 2, 3, 4].map((i) => (
-          <div key={i} className="relative aspect-square bg-gradient-to-br from-primary/20 to-primary/10 rounded-lg border border-primary/30 overflow-hidden group cursor-pointer hover:border-primary/50 transition">
-            <img 
-              src={`/puzzle-image-.jpg?height=200&width=200&query=puzzle+image+${i}`}
-              alt={`Puzzle image ${i}`}
-              className="w-full h-full object-cover group-hover:scale-105 transition"
-            />
-          </div>
-        ))}
-      </div>
+      <ImageGrid images={images} isLoading={!gameMetadata} />
 
       {!isSuccess && !isExpired ? (
         <>
@@ -76,44 +149,65 @@ export function GameBoard() {
                 onClick={handleSubmit}
                 disabled={isSubmitting || !guess.trim()}
               >
-                {isSubmitting ? 'Submitting...' : 'Submit'}
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                    Submitting...
+                  </>
+                ) : (
+                  'Submit'
+                )}
               </Button>
             </div>
+            {submitError && (
+              <p className="text-sm text-destructive">{submitError}</p>
+            )}
           </div>
 
-          {/* Hint */}
+          {/* Hint Button */}
           <div className="flex gap-2">
             <Button 
               variant="outline" 
               className="flex-1 gap-2"
-              onClick={() => {
-                buyHint(game.hintCost.toString())
-                setShowHint(true)
-              }}
-              disabled={isBuyingHint || game.hasPlayerBoughtHint}
+              onClick={handleBuyHint}
+              disabled={isBuyingHint || hasPlayerBoughtHint}
             >
               <Lightbulb className="w-4 h-4" />
-              {game.hasPlayerBoughtHint ? 'Hint Used' : `Buy Hint (${game.hintCost} CELO)`}
+              {hasPlayerBoughtHint ? 'Hint Used' : `Buy Hint (${formatCELO(game.hintCost)} CELO)`}
             </Button>
           </div>
 
-          {showHint && (
+          {/* Hint Display */}
+          {showHint && gameMetadata?.hint && (
             <Card className="p-4 bg-primary/10 border-primary/30">
-              <p className="text-sm text-foreground">Hint: A common activity people enjoy in summer</p>
+              <p className="text-sm font-medium text-foreground mb-1">💡 Hint:</p>
+              <p className="text-sm text-foreground">{gameMetadata.hint}</p>
             </Card>
           )}
         </>
       ) : (
-        <Card className="p-6 bg-primary/10 border-primary/30 text-center">
+        <Card className={`p-6 text-center ${isExpired ? 'bg-destructive/10 border-destructive/30' : 'bg-primary/10 border-primary/30'}`}>
           <h3 className="text-lg font-semibold text-foreground mb-2">
-            {isExpired ? 'Time\'s up!' : 'Correct! 🎉'}
+            {isExpired ? "⏰ Time's Up!" : '🎉 Correct!'}
           </h3>
           <p className="text-sm text-muted-foreground mb-4">
-            {isExpired ? 'Game over. Better luck next time!' : 'You earned 50 CELO and 100 XP'}
+            {isExpired 
+              ? 'Better luck next time!' 
+              : `You earned ${formatCELO(game.rewardAmount)} CELO!`
+            }
           </p>
-          <Button onClick={() => window.location.reload()} className="w-full gap-2">
-            <RotateCw className="w-4 h-4" />
-            Next Game
+          <Button onClick={handleStartNewGame} className="w-full gap-2" disabled={isStarting}>
+            {isStarting ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Starting...
+              </>
+            ) : (
+              <>
+                <RotateCw className="w-4 h-4" />
+                Next Game
+              </>
+            )}
           </Button>
         </Card>
       )}

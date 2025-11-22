@@ -1,9 +1,8 @@
 'use client'
 
-import { useState } from 'react'
 import useSWR from 'swr'
-import { addFriend as addFriendToContract, removeFriend as removeFriendFromContract, getFriends } from '@/lib/contract-helpers'
-import { useAccount } from 'wagmi'
+import { useWriteContract, useWaitForTransactionReceipt } from 'wagmi'
+import { getFriends, getAddFriendConfig, getRemoveFriendConfig } from '@/lib/contract-helpers'
 
 export function useFriends(playerAddress?: string) {
   const { data: friends, error, isLoading, mutate } = useSWR(
@@ -16,47 +15,45 @@ export function useFriends(playerAddress?: string) {
     { revalidateOnFocus: false, dedupingInterval: 30000 }
   )
 
-  const [isAdding, setIsAdding] = useState(false)
-  const [addError, setAddError] = useState<string | null>(null)
-  const [isRemoving, setIsRemoving] = useState(false)
-  const { address } = useAccount()
+  const { 
+    writeContract: addFriendWrite, 
+    data: addHash,
+    isPending: isAddPending 
+  } = useWriteContract()
+
+  const { isLoading: isAddConfirming } = useWaitForTransactionReceipt({
+    hash: addHash,
+  })
+
+  const { 
+    writeContract: removeFriendWrite,
+    data: removeHash,
+    isPending: isRemovePending 
+  } = useWriteContract()
+
+  const { isLoading: isRemoveConfirming } = useWaitForTransactionReceipt({
+    hash: removeHash,
+  })
 
   const addFriend = async (friendAddress: string) => {
-    if (!address) {
-      setAddError('Wallet not connected')
-      return
-    }
-
-    setIsAdding(true)
-    setAddError(null)
-
     try {
-      await addFriendToContract(address, friendAddress)
-      await mutate()
+      addFriendWrite(getAddFriendConfig(friendAddress))
+      // Refetch after transaction
+      setTimeout(() => mutate(), 2000)
     } catch (err) {
-      console.error('[v0] Error adding friend:', err)
-      setAddError(err instanceof Error ? err.message : 'Failed to add friend')
-    } finally {
-      setIsAdding(false)
+      console.error('[Hook] Error adding friend:', err)
+      throw err
     }
   }
 
   const removeFriend = async (friendAddress: string) => {
-    if (!address) {
-      setAddError('Wallet not connected')
-      return
-    }
-
-    setIsRemoving(true)
-
     try {
-      await removeFriendFromContract(address, friendAddress)
-      await mutate()
+      removeFriendWrite(getRemoveFriendConfig(friendAddress))
+      // Refetch after transaction
+      setTimeout(() => mutate(), 2000)
     } catch (err) {
-      console.error('[v0] Error removing friend:', err)
-      setAddError(err instanceof Error ? err.message : 'Failed to remove friend')
-    } finally {
-      setIsRemoving(false)
+      console.error('[Hook] Error removing friend:', err)
+      throw err
     }
   }
 
@@ -66,8 +63,7 @@ export function useFriends(playerAddress?: string) {
     error,
     addFriend,
     removeFriend,
-    isAdding,
-    isRemoving,
-    addError,
+    isAdding: isAddPending || isAddConfirming,
+    isRemoving: isRemovePending || isRemoveConfirming,
   }
 }

@@ -1,42 +1,34 @@
 'use client'
 
-import { useState } from 'react'
-import { startPlayerGame } from '@/lib/contract-helpers'
-import { useAccount } from 'wagmi'
+import { useWriteContract, useWaitForTransactionReceipt } from 'wagmi'
+import { getStartGameConfig } from '@/lib/contract-helpers'
 
 export function useStartGame() {
-  const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [txHash, setTxHash] = useState<string | null>(null)
-  const { address } = useAccount()
+  const { 
+    writeContract, 
+    data: hash, 
+    error,
+    isPending 
+  } = useWriteContract()
+
+  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({
+    hash,
+  })
 
   const startGame = async () => {
-    if (!address) {
-      setError('Wallet not connected')
-      return
-    }
-
-    setIsLoading(true)
-    setError(null)
-    setTxHash(null)
-
     try {
-      const hash = await startPlayerGame(address)
-      if (hash) {
-        setTxHash(hash)
-      }
+      writeContract(getStartGameConfig())
     } catch (err) {
-      console.error('[v0] Error starting game:', err)
-      setError(err instanceof Error ? err.message : 'Failed to start game')
-    } finally {
-      setIsLoading(false)
+      console.error('[Hook] Error starting game:', err)
+      throw err
     }
   }
 
   return {
     startGame,
-    isLoading,
-    error,
-    txHash,
+    isLoading: isPending || isConfirming,
+    error: error?.message || null,
+    txHash: hash,
+    isSuccess,
   }
 }

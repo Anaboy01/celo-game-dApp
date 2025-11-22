@@ -1,46 +1,38 @@
 'use client'
 
-import { useState } from 'react'
-import { submitGuess as submitGuessToContract } from '@/lib/contract-helpers'
-import { useAccount } from 'wagmi'
+import { useWriteContract, useWaitForTransactionReceipt } from 'wagmi'
+import { getSubmitGuessConfig } from '@/lib/contract-helpers'
 
 export function useSubmitGuess() {
-  const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [isSuccess, setIsSuccess] = useState(false)
-  const [txHash, setTxHash] = useState<string | null>(null)
-  const { address } = useAccount()
+  const { 
+    writeContract, 
+    data: hash, 
+    error,
+    isPending 
+  } = useWriteContract()
+
+  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({
+    hash,
+  })
 
   const submitGuess = async (guess: string) => {
-    if (!address) {
-      setError('Wallet not connected')
-      return
+    if (!guess.trim()) {
+      throw new Error('Please enter a guess')
     }
 
-    setIsLoading(true)
-    setError(null)
-    setIsSuccess(false)
-    setTxHash(null)
-
     try {
-      const hash = await submitGuessToContract(address, guess)
-      if (hash) {
-        setTxHash(hash)
-        setIsSuccess(true)
-      }
+      writeContract(getSubmitGuessConfig(guess))
     } catch (err) {
-      console.error('[v0] Error submitting guess:', err)
-      setError(err instanceof Error ? err.message : 'Failed to submit guess')
-    } finally {
-      setIsLoading(false)
+      console.error('[Hook] Error submitting guess:', err)
+      throw err
     }
   }
 
   return {
     submitGuess,
-    isLoading,
-    error,
+    isLoading: isPending || isConfirming,
+    error: error?.message || null,
     isSuccess,
-    txHash,
+    txHash: hash,
   }
 }
