@@ -169,6 +169,11 @@ contract GameContract {
         _;
     }
 
+    modifier notOwner() {
+        require(msg.sender != owner, "Owner cannot play");
+        _;
+    }
+
     modifier nonReentrant() {
         require(_status != _ENTERED, "Reentrant call");
         _status = _ENTERED;
@@ -229,7 +234,7 @@ contract GameContract {
         );
     }
 
-    function startPlayerGame() public {
+    function startPlayerGame() public notOwner {
         require(!hasActiveGame[msg.sender], "Game active");
         require(activeGameTemplateIds.length > 0, "No games");
 
@@ -282,7 +287,7 @@ contract GameContract {
         );
     }
 
-    function submitGuess(string memory _guess) external nonReentrant {
+    function submitGuess(string memory _guess) external nonReentrant notOwner {
         require(bytes(_guess).length > 0, "Empty guess");
 
         if (!hasActiveGame[msg.sender]) {
@@ -321,7 +326,7 @@ contract GameContract {
         _checkAchievements(msg.sender);
     }
 
-    function buyHint() external payable nonReentrant {
+    function buyHint() external payable nonReentrant notOwner {
         if (!hasActiveGame[msg.sender]) {
             startPlayerGame();
         } else {
@@ -412,7 +417,7 @@ contract GameContract {
         emit FriendRemoved(msg.sender, _friend, block.timestamp);
     }
 
-    function getNewGame() external {
+    function getNewGame() external notOwner {
         if (hasActiveGame[msg.sender]) {
             Game storage currentGame = playerGames[msg.sender];
             if (currentGame.isActive) {

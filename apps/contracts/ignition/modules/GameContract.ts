@@ -6,8 +6,8 @@ import { parseEther } from "viem";
 
 
 const DEFAULT_GAME_DURATION = 3600;
-const DEFAULT_MIN_REWARD = parseEther("0.001");
-const DEFAULT_MAX_REWARD = parseEther("0.1");
+const DEFAULT_MIN_REWARD = parseEther("0.1");
+const DEFAULT_MAX_REWARD = parseEther("10");
 
 const GameContractModule = buildModule("GameContractModule", (m) => {
   const gameDuration = m.getParameter("gameDuration", DEFAULT_GAME_DURATION);
@@ -19,7 +19,7 @@ const GameContractModule = buildModule("GameContractModule", (m) => {
     minRewardAmount,
     maxRewardAmount,
   ], {
-    value: parseEther("1"), // Fund contract with 1 CELO for rewards
+    value: parseEther("1"),
   });
 
   return { gameContract };

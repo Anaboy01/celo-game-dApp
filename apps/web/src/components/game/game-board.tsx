@@ -10,6 +10,8 @@ import { useGame, useGameTimer } from '@/hooks/use-game'
 import { useSubmitGuess } from '@/hooks/use-submit-guess'
 import { useBuyHint } from '@/hooks/use-buy-hint'
 import { useStartGame } from '@/hooks/use-start-game'
+import { useHintStatus } from '@/hooks/use-hint-status'
+import { useGetNewGame } from '@/hooks/use-get-new-game'
 import { useAccount } from 'wagmi'
 import { getGameMetadata, getIPFSImageUrl } from '@/lib/ipfs'
 import { formatCELO } from '@/lib/contract-helpers'
@@ -19,14 +21,15 @@ export function GameBoard() {
   const [guess, setGuess] = useState('')
   const [showHint, setShowHint] = useState(false)
   const [gameMetadata, setGameMetadata] = useState<any>(null)
-  const [hasPlayerBoughtHint, setHasPlayerBoughtHint] = useState(false)
 
   const { address } = useAccount()
   const { game, isLoading: isGameLoading, refetch } = useGame(address)
   const { timeLeft, isExpired, formattedTime } = useGameTimer(game?.endTime ? Number(game.endTime) : undefined)
   const { submitGuess, isLoading: isSubmitting, isSuccess, error: submitError } = useSubmitGuess()
-  const { buyHint, isLoading: isBuyingHint } = useBuyHint()
+  const { buyHint, isLoading: isBuyingHint, isSuccess: isHintBought } = useBuyHint()
   const { startGame, isLoading: isStarting } = useStartGame()
+  const { getNew, isLoading: isGettingNew } = useGetNewGame()
+  const { hasBoughtHint, refetch: refetchHint } = useHintStatus(address)
 
   // Fetch game metadata when game changes
   useEffect(() => {
@@ -51,17 +54,32 @@ export function GameBoard() {
   const handleBuyHint = async () => {
     if (!game) return
     await buyHint(game.hintCost)
-    setHasPlayerBoughtHint(true)
-    setShowHint(true)
+    setTimeout(() => {
+      refetchHint()
+      setShowHint(true)
+    }, 2000)
   }
 
   const handleStartNewGame = async () => {
-    await startGame()
+    if (game?.isActive) {
+      await getNew()
+    } else {
+      await startGame()
+    }
     setGuess('')
     setShowHint(false)
-    setHasPlayerBoughtHint(false)
-    setTimeout(() => refetch(), 2000)
+    setTimeout(() => {
+      refetch()
+      refetchHint()
+    }, 2000)
   }
+
+  // Update hint display when hint is bought
+  useEffect(() => {
+    if (hasBoughtHint && gameMetadata?.hint) {
+      setShowHint(true)
+    }
+  }, [hasBoughtHint, gameMetadata])
 
   if (isGameLoading) {
     return (
@@ -83,11 +101,11 @@ export function GameBoard() {
         </div>
         <Button 
           onClick={handleStartNewGame}
-          disabled={isStarting || !address}
+          disabled={isStarting || isGettingNew || !address}
           size="lg"
           className="gap-2"
         >
-          {isStarting ? (
+          {(isStarting || isGettingNew) ? (
             <>
               <Loader2 className="w-5 h-5 animate-spin" />
               Starting Game...
@@ -170,10 +188,10 @@ export function GameBoard() {
               variant="outline" 
               className="flex-1 gap-2"
               onClick={handleBuyHint}
-              disabled={isBuyingHint || hasPlayerBoughtHint}
+              disabled={isBuyingHint || hasBoughtHint}
             >
               <Lightbulb className="w-4 h-4" />
-              {hasPlayerBoughtHint ? 'Hint Used' : `Buy Hint (${formatCELO(game.hintCost)} CELO)`}
+              {hasBoughtHint ? 'Hint Used' : `Buy Hint (${formatCELO(game.hintCost)} CELO)`}
             </Button>
           </div>
 
@@ -196,8 +214,8 @@ export function GameBoard() {
               : `You earned ${formatCELO(game.rewardAmount)} CELO!`
             }
           </p>
-          <Button onClick={handleStartNewGame} className="w-full gap-2" disabled={isStarting}>
-            {isStarting ? (
+          <Button onClick={handleStartNewGame} className="w-full gap-2" disabled={isStarting || isGettingNew}>
+            {(isStarting || isGettingNew) ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
                 Starting...

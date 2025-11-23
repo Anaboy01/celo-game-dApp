@@ -1,42 +1,34 @@
 'use client'
 
-import { useState } from 'react'
-import { getNewGame } from '@/lib/contract-helpers'
-import { useAccount } from 'wagmi'
+import { useWriteContract, useWaitForTransactionReceipt } from 'wagmi'
+import { getNewGameConfig } from '@/lib/contract-helpers'
 
 export function useGetNewGame() {
-  const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [txHash, setTxHash] = useState<string | null>(null)
-  const { address } = useAccount()
+  const {
+    writeContract,
+    data: hash,
+    error,
+    isPending
+  } = useWriteContract()
+
+  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({
+    hash,
+  })
 
   const getNew = async () => {
-    if (!address) {
-      setError('Wallet not connected')
-      return
-    }
-
-    setIsLoading(true)
-    setError(null)
-    setTxHash(null)
-
     try {
-      const hash = await getNewGame(address)
-      if (hash) {
-        setTxHash(hash)
-      }
+      writeContract(getNewGameConfig())
     } catch (err) {
-      console.error('[v0] Error getting new game:', err)
-      setError(err instanceof Error ? err.message : 'Failed to get new game')
-    } finally {
-      setIsLoading(false)
+      console.error('[Hook] Error getting new game:', err)
+      throw err
     }
   }
 
   return {
     getNew,
-    isLoading,
-    error,
-    txHash,
+    isLoading: isPending || isConfirming,
+    error: error?.message || null,
+    txHash: hash,
+    isSuccess,
   }
 }

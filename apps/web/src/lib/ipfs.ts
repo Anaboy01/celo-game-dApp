@@ -17,7 +17,7 @@ export async function uploadToIPFS(data: any): Promise<string> {
     const apiSecret = process.env.NEXT_PUBLIC_PINATA_SECRET
     
     if (!apiKey || !apiSecret) {
-      throw new Error('Pinata credentials not configured')
+      throw new Error('Pinata credentials not configured. Please add NEXT_PUBLIC_PINATA_API_KEY and NEXT_PUBLIC_PINATA_SECRET to your .env.local file')
     }
 
     const response = await fetch('https://api.pinata.cloud/pinning/pinJSONToIPFS', {
@@ -36,11 +36,23 @@ export async function uploadToIPFS(data: any): Promise<string> {
     })
 
     if (!response.ok) {
-      throw new Error('Failed to upload to IPFS')
+      const errorText = await response.text()
+      console.error('[IPFS] Upload failed:', response.status, errorText)
+      throw new Error(`Failed to upload to IPFS: ${response.status} ${errorText}`)
     }
 
     const result = await response.json()
-    return result.IpfsHash
+    console.log('[IPFS] Upload response:', result)
+    
+    // Pinata returns the hash in different fields depending on API version
+    const hash = result.IpfsHash || result.ipfsHash || result.hash || result.data?.IpfsHash
+    
+    if (!hash) {
+      console.error('[IPFS] No hash in response:', result)
+      throw new Error('IPFS upload succeeded but no hash returned. Response: ' + JSON.stringify(result))
+    }
+    
+    return hash
   } catch (error) {
     console.error('[IPFS] Upload error:', error)
     throw error

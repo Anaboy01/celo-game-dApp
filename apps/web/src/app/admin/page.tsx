@@ -10,12 +10,42 @@ import { useAccount, useWriteContract, useWaitForTransactionReceipt, useReadCont
 import { GAME_CONTRACT_ADDRESS, GAME_CONTRACT_ABI } from '@/lib/contract-config'
 import { formatCELO } from '@/lib/contract-helpers'
 import { parseEther } from 'viem'
+import { uploadToIPFS, validateImageUrls, type GameMetadata } from '@/lib/ipfs'
 
 interface TemplateForm {
   answer: string
   reward: string
   difficulty: '0' | '1' | '2'
   hint: string
+  images: string[] // Array of 4 image URLs or IPFS hashes
+}
+
+// Helper to extract error message from various error types
+function extractErrorMessage(error: any): string {
+  if (!error) return 'Unknown error'
+  
+  // Try to get the most useful error message
+  if (error.message) {
+    // Check for revert reason in the message
+    const revertMatch = error.message.match(/revert\s+(.+)/i) || 
+                       error.message.match(/execution reverted:\s*(.+)/i) ||
+                       error.message.match(/reason:\s*(.+)/i)
+    if (revertMatch) {
+      return revertMatch[1].trim()
+    }
+    return error.message
+  }
+  
+  if (error.reason) return error.reason
+  if (error.shortMessage) return error.shortMessage
+  if (typeof error === 'string') return error
+  
+  // Try to stringify the error
+  try {
+    return JSON.stringify(error, null, 2)
+  } catch {
+    return String(error)
+  }
 }
 
 export default function AdminPage() {
@@ -25,10 +55,13 @@ export default function AdminPage() {
   const [withdrawAmount, setWithdrawAmount] = useState('')
   const [templateForm, setTemplateForm] = useState<TemplateForm>({
     answer: '',
-    reward: '10',
+    reward: '1',
     difficulty: '0',
     hint: '',
+    images: ['', '', '', ''],
   })
+  const [isUploadingToIPFS, setIsUploadingToIPFS] = useState(false)
+  const [ipfsHash, setIpfsHash] = useState<string | null>(null)
   const [answerHash, setAnswerHash] = useState<string | null>(null)
   const [txStatus, setTxStatus] = useState<{message: string, type: 'success' | 'error' | 'info'} | null>(null)
 
@@ -51,11 +84,30 @@ export default function AdminPage() {
     functionName: 'getActiveGameTemplateCount',
   })
 
+  const { data: minRewardAmount } = useReadContract({
+    address: GAME_CONTRACT_ADDRESS as `0x${string}`,
+    abi: GAME_CONTRACT_ABI,
+    functionName: 'minRewardAmount' as any,
+  })
+
+  const { data: maxRewardAmount } = useReadContract({
+    address: GAME_CONTRACT_ADDRESS as `0x${string}`,
+    abi: GAME_CONTRACT_ABI,
+    functionName: 'maxRewardAmount' as any,
+  })
+
+  // Type-safe reward limits
+  const minReward = minRewardAmount as bigint | undefined
+  const maxReward = maxRewardAmount as bigint | undefined
+
+  // Normalize answer the same way the contract does (lowercase, trim spaces)
+  const normalizedAnswer = templateForm.answer ? templateForm.answer.toLowerCase().trim().replace(/^\s+|\s+$/g, '') : ''
+
   const { data: calculatedHash } = useReadContract({
     address: GAME_CONTRACT_ADDRESS as `0x${string}`,
     abi: GAME_CONTRACT_ABI,
     functionName: 'calculateAnswerHash',
-    args: templateForm.answer ? [templateForm.answer.toLowerCase().trim()] : undefined,
+    args: normalizedAnswer ? [normalizedAnswer] : undefined,
   })
 
   useEffect(() => {
@@ -71,8 +123,12 @@ export default function AdminPage() {
     error: addTemplateError 
   } = useWriteContract()
 
-  const { isLoading: isAddTemplateConfirming, isSuccess: isAddTemplateSuccess } = 
-    useWaitForTransactionReceipt({ hash: addTemplateHash })
+  const { 
+    isLoading: isAddTemplateConfirming, 
+    isSuccess: isAddTemplateSuccess,
+    error: addTemplateReceiptError,
+    data: addTemplateReceipt
+  } = useWaitForTransactionReceipt({ hash: addTemplateHash })
 
   const { 
     writeContract: depositFunds, 
@@ -81,30 +137,38 @@ export default function AdminPage() {
     error: depositError 
   } = useWriteContract()
 
-  const { isLoading: isDepositConfirming, isSuccess: isDepositSuccess } = 
-    useWaitForTransactionReceipt({ hash: depositHash })
+  const { 
+    isLoading: isDepositConfirming, 
+    isSuccess: isDepositSuccess,
+    error: depositReceiptError
+  } = useWaitForTransactionReceipt({ hash: depositHash })
 
   const { 
     writeContract: withdrawFunds, 
     data: withdrawHash,
     isPending: isWithdrawing,
+    error: withdrawError
   } = useWriteContract()
 
-  const { isLoading: isWithdrawConfirming, isSuccess: isWithdrawSuccess } = 
-    useWaitForTransactionReceipt({ hash: withdrawHash })
+  const { 
+    isLoading: isWithdrawConfirming, 
+    isSuccess: isWithdrawSuccess,
+    error: withdrawReceiptError
+  } = useWaitForTransactionReceipt({ hash: withdrawHash })
 
   const isOwner = owner && address && (owner as string).toLowerCase() === address.toLowerCase()
 
   useEffect(() => {
     if (isAddTemplateSuccess) {
-      setTxStatus({ message: '✅ Template added successfully!', type: 'success' })
-      setTemplateForm({ answer: '', reward: '10', difficulty: '0', hint: '' })
+      setTxStatus({ message: `✅ Template added successfully! IPFS: ${ipfsHash?.slice(0, 10)}...`, type: 'success' })
+      setTemplateForm({ answer: '', reward: '1', difficulty: '0', hint: '', images: ['', '', '', ''] })
+      setIpfsHash(null)
       setTimeout(() => {
         refetchCount()
         setTxStatus(null)
-      }, 3000)
+      }, 5000)
     }
-  }, [isAddTemplateSuccess])
+  }, [isAddTemplateSuccess, ipfsHash, refetchCount])
 
   useEffect(() => {
     if (isDepositSuccess) {
@@ -128,23 +192,94 @@ export default function AdminPage() {
     }
   }, [isWithdrawSuccess])
 
+  // Enhanced error logging
   useEffect(() => {
     if (addTemplateError) {
-      setTxStatus({ message: `❌ Error: ${addTemplateError.message?.slice(0, 100)}...`, type: 'error' })
-      setTimeout(() => setTxStatus(null), 8000)
+      console.error('[Admin] Add Template Error:', addTemplateError)
+      const errorMessage = extractErrorMessage(addTemplateError)
+      const shortMessage = errorMessage.length > 300 ? errorMessage.slice(0, 300) + '...' : errorMessage
+      setTxStatus({ 
+        message: `❌ Transaction Failed: ${shortMessage}`, 
+        type: 'error' 
+      })
+      setTimeout(() => setTxStatus(null), 15000)
     }
   }, [addTemplateError])
 
   useEffect(() => {
+    if (addTemplateReceiptError) {
+      console.error('[Admin] Add Template Receipt Error:', addTemplateReceiptError)
+      const errorMessage = extractErrorMessage(addTemplateReceiptError)
+      const shortMessage = errorMessage.length > 300 ? errorMessage.slice(0, 300) + '...' : errorMessage
+      setTxStatus({ 
+        message: `❌ Transaction Reverted: ${shortMessage}`, 
+        type: 'error' 
+      })
+      setTimeout(() => setTxStatus(null), 15000)
+    }
+  }, [addTemplateReceiptError])
+
+  useEffect(() => {
     if (depositError) {
-      setTxStatus({ message: `❌ Error: ${depositError.message?.slice(0, 100)}...`, type: 'error' })
-      setTimeout(() => setTxStatus(null), 8000)
+      console.error('[Admin] Deposit Error:', depositError)
+      const errorMessage = extractErrorMessage(depositError)
+      const shortMessage = errorMessage.length > 300 ? errorMessage.slice(0, 300) + '...' : errorMessage
+      setTxStatus({ 
+        message: `❌ Deposit Failed: ${shortMessage}`, 
+        type: 'error' 
+      })
+      setTimeout(() => setTxStatus(null), 15000)
     }
   }, [depositError])
 
-  const handleAddTemplate = () => {
+  useEffect(() => {
+    if (depositReceiptError) {
+      console.error('[Admin] Deposit Receipt Error:', depositReceiptError)
+      const errorMessage = extractErrorMessage(depositReceiptError)
+      const shortMessage = errorMessage.length > 300 ? errorMessage.slice(0, 300) + '...' : errorMessage
+      setTxStatus({ 
+        message: `❌ Deposit Reverted: ${shortMessage}`, 
+        type: 'error' 
+      })
+      setTimeout(() => setTxStatus(null), 15000)
+    }
+  }, [depositReceiptError])
+
+  useEffect(() => {
+    if (withdrawError) {
+      console.error('[Admin] Withdraw Error:', withdrawError)
+      const errorMessage = extractErrorMessage(withdrawError)
+      const shortMessage = errorMessage.length > 300 ? errorMessage.slice(0, 300) + '...' : errorMessage
+      setTxStatus({ 
+        message: `❌ Withdraw Failed: ${shortMessage}`, 
+        type: 'error' 
+      })
+      setTimeout(() => setTxStatus(null), 15000)
+    }
+  }, [withdrawError])
+
+  useEffect(() => {
+    if (withdrawReceiptError) {
+      console.error('[Admin] Withdraw Receipt Error:', withdrawReceiptError)
+      const errorMessage = extractErrorMessage(withdrawReceiptError)
+      const shortMessage = errorMessage.length > 300 ? errorMessage.slice(0, 300) + '...' : errorMessage
+      setTxStatus({ 
+        message: `❌ Withdraw Reverted: ${shortMessage}`, 
+        type: 'error' 
+      })
+      setTimeout(() => setTxStatus(null), 15000)
+    }
+  }, [withdrawReceiptError])
+
+  const handleAddTemplate = async () => {
     if (!templateForm.answer || !templateForm.reward || !answerHash) {
       setTxStatus({ message: '⚠️ Please fill in all fields', type: 'error' })
+      return
+    }
+
+    // Validate images
+    if (!validateImageUrls(templateForm.images)) {
+      setTxStatus({ message: '⚠️ Please provide 4 image URLs', type: 'error' })
       return
     }
 
@@ -153,19 +288,77 @@ export default function AdminPage() {
       return
     }
 
+    const rewardAmount = parseFloat(templateForm.reward)
+    if (isNaN(rewardAmount) || rewardAmount <= 0) {
+      setTxStatus({ message: '⚠️ Please enter a valid reward amount', type: 'error' })
+      return
+    }
+
+    // Validate reward amount against contract limits
+    const rewardInWei = parseEther(templateForm.reward)
+    
+    if (minReward && rewardInWei < minReward) {
+      const minCELO = Number(minReward) / 1e18
+      setTxStatus({ 
+        message: `⚠️ Reward too low. Minimum: ${minCELO.toFixed(2)} CELO`, 
+        type: 'error' 
+      })
+      return
+    }
+    if (maxReward && rewardInWei > maxReward) {
+      const maxCELO = Number(maxReward) / 1e18
+      setTxStatus({ 
+        message: `⚠️ Reward too high. Maximum: ${maxCELO.toFixed(2)} CELO`, 
+        type: 'error' 
+      })
+      return
+    }
+
     try {
+      // Upload metadata to IPFS first
+      setIsUploadingToIPFS(true)
+      setTxStatus({ message: '📤 Uploading metadata to IPFS...', type: 'info' })
+
+      const metadata: GameMetadata = {
+        templateId: 0, // Will be set by contract
+        images: templateForm.images,
+        answer: templateForm.answer,
+        hint: templateForm.hint,
+        difficulty: ['easy', 'medium', 'hard'][parseInt(templateForm.difficulty)] as 'easy' | 'medium' | 'hard',
+      }
+
+      const metadataHash = await uploadToIPFS(metadata)
+      console.log('[Admin] IPFS hash received:', metadataHash)
+      
+      if (!metadataHash) {
+        throw new Error('IPFS upload returned no hash')
+      }
+      
+      setIpfsHash(metadataHash)
+      setIsUploadingToIPFS(false)
+      
+      setTxStatus({ message: `✅ Metadata uploaded to IPFS: ${metadataHash.slice(0, 10)}...`, type: 'info' })
+
+      // Now create the template on-chain
       addTemplate({
         address: GAME_CONTRACT_ADDRESS as `0x${string}`,
         abi: GAME_CONTRACT_ABI,
         functionName: 'addGameTemplate',
         args: [
           answerHash as `0x${string}`,
-          parseEther(templateForm.reward),
+          rewardInWei,
           parseInt(templateForm.difficulty),
         ],
       })
+      setTxStatus({ message: '⏳ Confirm transaction in your wallet...', type: 'info' })
     } catch (error: any) {
-      setTxStatus({ message: `❌ ${error.message}`, type: 'error' })
+      setIsUploadingToIPFS(false)
+      console.error('[Admin] Add template exception:', error)
+      const errorMessage = error?.message || error?.toString() || 'Unknown error'
+      setTxStatus({ 
+        message: `❌ Failed: ${errorMessage}`, 
+        type: 'error' 
+      })
     }
   }
 
@@ -176,14 +369,22 @@ export default function AdminPage() {
     }
 
     try {
+     
+      
       depositFunds({
         address: GAME_CONTRACT_ADDRESS as `0x${string}`,
         abi: GAME_CONTRACT_ABI,
         functionName: 'depositFunds',
         value: parseEther(depositAmount),
       })
+      setTxStatus({ message: '⏳ Confirm transaction in your wallet...', type: 'info' })
     } catch (error: any) {
-      setTxStatus({ message: `❌ ${error.message}`, type: 'error' })
+      console.error('[Admin] Deposit exception:', error)
+      const errorMessage = error?.message || error?.toString() || 'Unknown error'
+      setTxStatus({ 
+        message: `❌ Failed to send transaction: ${errorMessage}`, 
+        type: 'error' 
+      })
     }
   }
 
@@ -194,21 +395,32 @@ export default function AdminPage() {
     }
 
     try {
+      console.log('[Admin] Withdrawing funds:', {
+        amount: withdrawAmount,
+        wei: parseEther(withdrawAmount).toString(),
+      })
+      
       withdrawFunds({
         address: GAME_CONTRACT_ADDRESS as `0x${string}`,
         abi: GAME_CONTRACT_ABI,
         functionName: 'withdrawFunds',
         args: [parseEther(withdrawAmount)],
       })
+      setTxStatus({ message: '⏳ Confirm transaction in your wallet...', type: 'info' })
     } catch (error: any) {
-      setTxStatus({ message: `❌ ${error.message}`, type: 'error' })
+      console.error('[Admin] Withdraw exception:', error)
+      const errorMessage = error?.message || error?.toString() || 'Unknown error'
+      setTxStatus({ 
+        message: `❌ Failed to send transaction: ${errorMessage}`, 
+        type: 'error' 
+      })
     }
   }
 
   const SAMPLE_TEMPLATES = [
-    { answer: 'beach', reward: '10', difficulty: '0', hint: 'Sandy place by the ocean' },
-    { answer: 'mountain', reward: '20', difficulty: '1', hint: 'Very tall natural elevation' },
-    { answer: 'restaurant', reward: '30', difficulty: '2', hint: 'Place to eat meals' },
+    { answer: 'beach', reward: '0.5', difficulty: '0', hint: 'Sandy place by the ocean' },
+    { answer: 'mountain', reward: '2', difficulty: '1', hint: 'Very tall natural elevation' },
+    { answer: 'restaurant', reward: '5', difficulty: '2', hint: 'Place to eat meals' },
   ]
 
   const addSampleTemplate = (sample: typeof SAMPLE_TEMPLATES[0]) => {
@@ -302,15 +514,23 @@ export default function AdminPage() {
 
         {/* Status Message */}
         {txStatus && (
-          <Card className={`p-4 flex items-center gap-3 ${
+          <Card className={`p-4 flex items-start gap-3 ${
             txStatus.type === 'success' ? 'bg-primary/10 border-primary/30' :
             txStatus.type === 'error' ? 'bg-destructive/10 border-destructive/30' :
             'bg-muted/10 border-muted/30'
           }`}>
-            {txStatus.type === 'success' && <CheckCircle className="w-5 h-5 text-primary" />}
-            {txStatus.type === 'error' && <XCircle className="w-5 h-5 text-destructive" />}
-            <p className="text-sm flex-1">{txStatus.message}</p>
-            <Button variant="ghost" size="sm" onClick={() => setTxStatus(null)}>
+            {txStatus.type === 'success' && <CheckCircle className="w-5 h-5 text-primary mt-0.5" />}
+            {txStatus.type === 'error' && <XCircle className="w-5 h-5 text-destructive mt-0.5" />}
+            {txStatus.type === 'info' && <Loader2 className="w-5 h-5 text-primary animate-spin mt-0.5" />}
+            <div className="flex-1 min-w-0">
+              <p className="text-sm break-words">{txStatus.message}</p>
+              {txStatus.type === 'error' && (
+                <p className="text-xs text-muted-foreground mt-2">
+                  Check the browser console for detailed error logs
+                </p>
+              )}
+            </div>
+            <Button variant="ghost" size="sm" onClick={() => setTxStatus(null)} className="shrink-0">
               <XCircle className="w-4 h-4" />
             </Button>
           </Card>
@@ -321,7 +541,7 @@ export default function AdminPage() {
           <Card className="p-6 border-border bg-card/50">
             <p className="text-sm text-muted-foreground mb-2">Contract Balance</p>
             <p className="text-3xl font-bold text-foreground">
-              {contractBalance ? formatCELO(contractBalance as bigint) : '0.0000'} CELO
+               {contractBalance ? formatCELO(contractBalance as bigint) : '0.00'} CELO
             </p>
           </Card>
           <Card className="p-6 border-border bg-card/50">
@@ -376,22 +596,79 @@ export default function AdminPage() {
                         onChange={(e) => setTemplateForm({...templateForm, answer: e.target.value})}
                         className="bg-card border-border text-foreground"
                       />
-                      {answerHash && (
+                      {normalizedAnswer && (
                         <p className="text-xs text-muted-foreground mt-1">
-                          Hash: {answerHash.slice(0, 10)}...
+                          Normalized: "{normalizedAnswer}"
+                        </p>
+                      )}
+                      {answerHash && (
+                        <p className="text-xs text-muted-foreground mt-1 font-mono">
+                          Hash: {answerHash.slice(0, 20)}...
+                        </p>
+                      )}
+                      {!answerHash && normalizedAnswer && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Calculating hash...
                         </p>
                       )}
                     </div>
 
                     <div>
-                      <label className="text-sm font-medium text-foreground block mb-2">Reward (CELO)</label>
+                      <label className="text-sm font-medium text-foreground block mb-2">
+                        Reward (CELO)
+                        {minReward && maxReward && (
+                          <span className="text-xs text-muted-foreground ml-2 font-normal">
+                            (Range: {formatCELO(minReward)} - {formatCELO(maxReward)} CELO)
+                          </span>
+                        )}
+                      </label>
                       <Input
                         type="number"
-                        placeholder="10"
+                        step="0.1"
+                        placeholder="1.0"
                         value={templateForm.reward}
                         onChange={(e) => setTemplateForm({...templateForm, reward: e.target.value})}
                         className="bg-card border-border text-foreground"
                       />
+                      {minReward && maxReward && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Valid range: {formatCELO(minReward)} - {formatCELO(maxReward)} CELO
+                        </p>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="text-sm font-medium text-foreground block mb-2">Hint</label>
+                      <Input
+                        placeholder="e.g., A sandy place by the ocean"
+                        value={templateForm.hint}
+                        onChange={(e) => setTemplateForm({...templateForm, hint: e.target.value})}
+                        className="bg-card border-border text-foreground"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-sm font-medium text-foreground block mb-2">
+                        Images (4 URLs required)
+                      </label>
+                      <div className="space-y-2">
+                        {[0, 1, 2, 3].map((index) => (
+                          <Input
+                            key={index}
+                            placeholder={`Image ${index + 1} URL or IPFS hash...`}
+                            value={templateForm.images[index] || ''}
+                            onChange={(e) => {
+                              const newImages = [...templateForm.images]
+                              newImages[index] = e.target.value
+                              setTemplateForm({...templateForm, images: newImages})
+                            }}
+                            className="bg-card border-border text-foreground"
+                          />
+                        ))}
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Enter 4 image URLs or IPFS hashes. These will be stored on IPFS.
+                      </p>
                     </div>
 
                     <div>
@@ -411,13 +688,13 @@ export default function AdminPage() {
 
                     <Button 
                       onClick={handleAddTemplate}
-                      disabled={isAddingTemplate || isAddTemplateConfirming || !templateForm.answer || !templateForm.reward}
+                      disabled={isAddingTemplate || isAddTemplateConfirming || isUploadingToIPFS || !templateForm.answer || !templateForm.reward || !validateImageUrls(templateForm.images)}
                       className="w-full gap-2"
                     >
-                      {(isAddingTemplate || isAddTemplateConfirming) ? (
+                      {(isAddingTemplate || isAddTemplateConfirming || isUploadingToIPFS) ? (
                         <>
                           <Loader2 className="w-4 h-4 animate-spin" />
-                          {isAddingTemplate ? 'Confirm in Wallet...' : 'Adding...'}
+                          {isUploadingToIPFS ? 'Uploading to IPFS...' : isAddingTemplate ? 'Confirm in Wallet...' : 'Adding...'}
                         </>
                       ) : (
                         <>
@@ -435,7 +712,7 @@ export default function AdminPage() {
                   <div className="p-4 bg-card/50 rounded-lg border border-border">
                     <p className="text-sm text-muted-foreground mb-2">Current Balance</p>
                     <p className="text-2xl font-bold text-foreground mb-4">
-                      {contractBalance ? formatCELO(contractBalance as bigint) : '0.0000'} CELO
+                      {contractBalance ? formatCELO(contractBalance as bigint) : '0.00'} CELO
                     </p>
                   </div>
 

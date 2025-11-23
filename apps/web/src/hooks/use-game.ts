@@ -10,7 +10,7 @@ export function useGame(playerAddress?: string) {
     playerAddress ? ['game', playerAddress] : null,
     async () => {
       if (!playerAddress) return null
-      const result = await getCurrentGame(playerAddress)
+      const result = await getCurrentGame()
       return result
     },
     { revalidateOnFocus: false, dedupingInterval: 5000 }

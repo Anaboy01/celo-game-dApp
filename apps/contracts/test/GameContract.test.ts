@@ -8,8 +8,8 @@ describe("GameContract", function () {
     const [owner, player1, player2] = await hre.viem.getWalletClients();
 
     const gameDuration = 3600;
-    const minReward = parseEther("0.001");
-    const maxReward = parseEther("0.1");
+    const minReward = parseEther("0.1");
+    const maxReward = parseEther("10");
 
     const gameContract = await hre.viem.deployContract("GameContract", [
       gameDuration,

@@ -2,14 +2,29 @@
 
 import { useState } from 'react'
 import { Card } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-
-import { Trophy } from 'lucide-react'
+import { Trophy, Loader2 } from 'lucide-react'
+import { useAccount } from 'wagmi'
+import { useLeaderboard, useFriendLeaderboard } from '@/hooks/use-leaderboard'
 import { LeaderboardTable } from '@/components/leaderboard/leaderboard-table'
 
 export default function LeaderboardPage() {
   const [activeTab, setActiveTab] = useState('global')
+  const { address } = useAccount()
+  const { entries: globalEntries, isLoading: isGlobalLoading } = useLeaderboard(100)
+  const { entries: friendEntries, isLoading: isFriendLoading } = useFriendLeaderboard(address, 100)
+
+  // Transform contract data to table format
+  const transformEntries = (entries: typeof globalEntries) => {
+    return entries.map((entry, index) => ({
+      rank: index + 1,
+      address: entry.player,
+      score: Number(entry.score),
+      games: 0, // Not available from contract
+      streak: 0, // Not available from contract
+      isCurrentUser: address?.toLowerCase() === entry.player.toLowerCase(),
+    }))
+  }
 
   return (
     <div className="min-h-screen bg-background py-8">
@@ -33,11 +48,28 @@ export default function LeaderboardPage() {
 
             <div className="p-6">
               <TabsContent value="global" className="space-y-4">
-                <LeaderboardTable />
+                {isGlobalLoading ? (
+                  <div className="flex justify-center py-12">
+                    <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                  </div>
+                ) : (
+                  <LeaderboardTable entries={transformEntries(globalEntries)} />
+                )}
               </TabsContent>
 
               <TabsContent value="friends" className="space-y-4">
-                <LeaderboardTable />
+                {isFriendLoading ? (
+                  <div className="flex justify-center py-12">
+                    <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                  </div>
+                ) : friendEntries.length === 0 ? (
+                  <div className="text-center py-12 text-muted-foreground">
+                    <p>No friends on the leaderboard yet.</p>
+                    <p className="text-sm mt-2">Add friends to see them here!</p>
+                  </div>
+                ) : (
+                  <LeaderboardTable entries={transformEntries(friendEntries.filter(e => e.isFriend))} />
+                )}
               </TabsContent>
             </div>
           </Tabs>
